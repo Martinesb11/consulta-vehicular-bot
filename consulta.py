@@ -26,22 +26,28 @@ def limpiar_campo(txt):
 def crear_driver():
     download_dir = os.path.abspath('descargas_cv')
     os.makedirs(download_dir, exist_ok=True)
-    base = [
-        '--headless=new',
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-software-rasterizer',
-        '--disable-extensions',
-        '--disable-plugins',
-        '--single-process',
-        '--no-zygote',
-        '--memory-pressure-off',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,900',
-        '--lang=es-PE',
-        '--no-first-run',
-    ]
+  base = [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-extensions',
+    '--disable-plugins',
+    '--no-zygote',
+    '--disable-blink-features=AutomationControlled',
+    '--window-size=1280,900',
+    '--lang=es-PE',
+    '--no-first-run',
+    '--disable-background-networking',
+    '--disable-sync',
+    '--disable-translate',
+    '--hide-scrollbars',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--safebrowsing-disable-auto-update',
+    '--js-flags=--max-old-space-size=256',
+]
     ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     prefs = {
         'download.default_directory': download_dir,
