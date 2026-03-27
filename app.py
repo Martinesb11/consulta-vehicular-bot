@@ -6,7 +6,7 @@ import threading
 import requests
 from datetime import datetime
 from flask import Flask, request, jsonify
-from consulta import ejecutar_consulta_completa
+from consulta import ejecutar_consulta_completa, inicializar_driver_global
 
 app = Flask(__name__)
 
@@ -42,16 +42,13 @@ hilo_worker = threading.Thread(target=worker, daemon=True)
 hilo_worker.start()
 
 # ── Límite diario por usuario ──────────────────────────────
-# { 'numero': {'fecha': 'YYYY-MM-DD', 'count': N} }
 contadores = {}
 lock_contadores = threading.Lock()
 
 def verificar_limite(numero):
-    """Retorna True si puede consultar, False si alcanzó el límite"""
     hoy = datetime.now().strftime('%Y-%m-%d')
     with lock_contadores:
         datos = contadores.get(numero, {'fecha': hoy, 'count': 0})
-        # Resetear si es un nuevo día
         if datos['fecha'] != hoy:
             datos = {'fecha': hoy, 'count': 0}
         if datos['count'] >= LIMITE_DIARIO:
@@ -69,13 +66,11 @@ def consultas_restantes(numero):
         return max(0, LIMITE_DIARIO - datos['count'])
 
 # ── Anti-duplicados (caché 24h) ────────────────────────────
-# { 'PLACA': {'timestamp': float, 'pdf_b64': str, 'fecha': str} }
 cache_pdfs = {}
 lock_cache = threading.Lock()
 CACHE_HORAS = 24
 
 def obtener_cache(placa):
-    """Retorna pdf_b64 si está en caché y no expiró, sino None"""
     with lock_cache:
         dato = cache_pdfs.get(placa)
         if not dato:
@@ -157,7 +152,7 @@ def procesar_consulta(placa, destino, autor):
             enviar_mensaje(destino, f'❌ Error enviando PDF para *{placa}*')
         return
 
-    # Consulta completa
+    # Consulta completa (sesión activa)
     try:
         pdf_path = ejecutar_consulta_completa(placa, USUARIO_CV, CONTRASENA_CV)
         segundos = int(time.time() - inicio)
@@ -166,9 +161,7 @@ def procesar_consulta(placa, destino, autor):
             time.sleep(2)
             with open(pdf_path, 'rb') as f:
                 pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
-            # Guardar en caché
             guardar_cache(placa, pdf_b64)
-            # Enviar
             if enviar_pdf_b64(destino, pdf_b64, placa, autor):
                 print(f'✅ PDF enviado exitosamente')
                 registrar_log(autor, placa, 'exitoso', segundos)
@@ -197,12 +190,10 @@ def webhook():
         data     = request.json or {}
         msg_data = data.get('data', {})
 
-        # Solo del grupo autorizado
         if msg_data.get('from') != GRUPO_AUTORIZADO:
             print(f'Ignorado (no autorizado): {msg_data.get("from")}')
             return jsonify({'status': 'ignorado'}), 200
 
-        # Ignorar mensajes propios
         if msg_data.get('fromMe'):
             return jsonify({'status': 'ignorado'}), 200
 
@@ -215,7 +206,6 @@ def webhook():
             if 6 <= len(placa) <= 8:
                 # Verificar límite diario
                 if not verificar_limite(autor):
-                    restantes = consultas_restantes(autor)
                     nombre = MIEMBROS.get(autor, autor)
                     enviar_mensaje(GRUPO_AUTORIZADO,
                         f'🚫 *{nombre}* alcanzaste el límite de {LIMITE_DIARIO} consultas por hoy.\n'
@@ -223,16 +213,15 @@ def webhook():
                     )
                     return jsonify({'status': 'limite_alcanzado'}), 200
 
-                # Agregar a cola
+                # Avisar posición en cola
                 posicion = cola.qsize() + 1
                 if posicion > 1:
-                    tiempo_est = posicion * 5
+                    tiempo_est = posicion * 3
                     enviar_mensaje(GRUPO_AUTORIZADO,
                         f'📋 Placa *{placa}* añadida a la cola\n'
                         f'⏳ Posición #{posicion} — espera ~{tiempo_est} minutos'
                     )
                 else:
-                    # Verificar caché antes de avisar tiempo de espera
                     cached = obtener_cache(placa)
                     if cached:
                         enviar_mensaje(GRUPO_AUTORIZADO,
@@ -269,4 +258,6 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     print(f'🚀 Servidor iniciando en puerto {port}')
     print(f'📍 Grupo autorizado: {GRUPO_AUTORIZADO}')
+    print(f'🌐 Iniciando sesión web...')
+    inicializar_driver_global()  # ← Login una sola vez al arrancar
     app.run(host='0.0.0.0', port=port, debug=False)
