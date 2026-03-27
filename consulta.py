@@ -379,22 +379,27 @@ def esperar_descarga_pdf(driver, antes, timeout=150):
     return None
 
 def descargar_pdf(driver, placa):
+    # ---- CORREGIDO: selector exacto del botón "Generar Reporte" ----
     selectores = [
-        (By.XPATH, "//button[contains(translate(normalize-space(.),'GENERARREPORTE','generarreporte'),'generar reporte')]"),
-        (By.XPATH, "//a[contains(translate(normalize-space(.),'GENERARREPORTE','generarreporte'),'generar reporte')]"),
+        (By.XPATH, "//button[contains(normalize-space(.), 'Generar Reporte')]"),
+        (By.XPATH, "//button[contains(normalize-space(.), 'Generar')]"),
+        (By.XPATH, "//a[contains(normalize-space(.), 'Generar Reporte')]"),
+        (By.XPATH, "//button[contains(normalize-space(.), 'Reporte')]"),
+        (By.CSS_SELECTOR, 'button.btn-success'),
+        (By.CSS_SELECTOR, 'button.btn-primary'),
         (By.CSS_SELECTOR, 'button[download], a[download]'),
     ]
-    fin = time.time() + 50
+    fin = time.time() + 60
     btn = None
     while time.time() < fin:
         for by, sel in selectores:
             try:
                 for el in driver.find_elements(by, sel):
-                    txt = texto_normalizado(el.text or el.get_attribute('aria-label') or '')
-                    if ('reporte' in txt or el.get_attribute('download')) and el.is_displayed():
+                    if el.is_displayed():
                         disabled = el.get_attribute('disabled') or 'disabled' in (el.get_attribute('class') or '').lower()
                         if not disabled:
                             btn = el
+                            print(f'Boton encontrado: [{el.text}]')
                             break
                 if btn:
                     break
@@ -404,6 +409,7 @@ def descargar_pdf(driver, placa):
             break
         time.sleep(0.5)
     if not btn:
+        print('ERROR: No se encontro el boton de descarga')
         return None
     antes = archivos_en_descargas(driver)
     try:
