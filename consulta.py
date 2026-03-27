@@ -1,10 +1,11 @@
-import os, re, time, glob, shutil, base64
+import os, re, time, glob, shutil, base64, random
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -22,26 +23,30 @@ def texto_normalizado(txt):
 def limpiar_campo(txt):
     return re.sub(r'\s+', ' ', (txt or '').strip()).strip(' :')
 
-def limpiar_nombre_hoja(nombre, fallback='Hoja'):
-    nombre = re.sub(r'[\\/*?:\[\]]+', '_', (nombre or '').strip())
-    nombre = re.sub(r'\s+', '_', nombre).strip('_')
-    return (nombre[:31] or fallback)
-
 def crear_driver():
     download_dir = os.path.abspath('descargas_cv')
     os.makedirs(download_dir, exist_ok=True)
     base = [
-        '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+        '--headless=new',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--single-process',
+        '--no-zygote',
+        '--memory-pressure-off',
         '--disable-blink-features=AutomationControlled',
-        '--disable-infobars', '--disable-popup-blocking',
-        '--window-size=1600,3200', '--lang=es-PE',
+        '--window-size=1280,900',
+        '--lang=es-PE',
+        '--no-first-run',
     ]
-    ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     prefs = {
         'download.default_directory': download_dir,
         'download.prompt_for_download': False,
         'download.directory_upgrade': True,
-        'download.restrictions': 0,
         'plugins.always_open_pdf_externally': True,
         'safebrowsing.enabled': True,
     }
@@ -50,23 +55,28 @@ def crear_driver():
         for a in base: opts.add_argument(a)
         opts.add_argument(f'--user-agent={ua}')
         opts.add_experimental_option('prefs', prefs)
+        opts.add_experimental_option('excludeSwitches', ['enable-automation'])
+        opts.add_experimental_option('useAutomationExtension', False)
         if binary: opts.binary_location = binary
         return opts
     try:
         d = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=_opts())
     except Exception:
-        ultimo = None
         for binary in ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']:
-            try: d = webdriver.Chrome(options=_opts(binary)); break
-            except Exception as e: ultimo = e
+            try:
+                d = webdriver.Chrome(options=_opts(binary))
+                break
+            except Exception:
+                continue
         else:
-            raise RuntimeError(f'No se pudo iniciar Chrome. {ultimo}')
+            raise RuntimeError('No se pudo iniciar Chrome.')
     try:
         d.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
             'source': """
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                Object.defineProperty(navigator, 'language', {get: () => 'es-PE'});
-                Object.defineProperty(navigator, 'languages', {get: () => ['es-PE','es','en']});
+                Object.defineProperty(navigator, 'languages', {get: () => ['es-PE','es','en-US']});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                window.chrome = { runtime: {} };
             """
         })
     except Exception: pass
@@ -83,32 +93,41 @@ def esperar_documento_listo(driver, timeout=25):
 
 def js_click(driver, el):
     driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", el)
-    time.sleep(0.25)
-    try: el.click(); return
+    time.sleep(0.3)
+    try:
+        el.click()
+        return
     except Exception: pass
-    try: ActionChains(driver).move_to_element(el).pause(0.15).click(el).perform(); return
+    try:
+        ActionChains(driver).move_to_element(el).pause(0.2).click(el).perform()
+        return
     except Exception: pass
     driver.execute_script("arguments[0].click();", el)
 
-def escribir_input(driver, el, valor):
+def escribir_humano(driver, el, valor):
+    """Escribe como humano: letra por letra con pequeñas pausas"""
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-    time.sleep(0.2)
+    time.sleep(0.3)
     try: el.click()
     except Exception: pass
-    try: el.clear()
-    except Exception: pass
+    time.sleep(0.2)
+    # Limpiar campo completamente
     try:
         el.send_keys(Keys.CONTROL, 'a')
+        time.sleep(0.1)
         el.send_keys(Keys.DELETE)
-        el.send_keys(valor)
-    except Exception:
-        driver.execute_script("""
-            const el=arguments[0], value=arguments[1];
-            el.focus(); el.value=value;
-            el.dispatchEvent(new Event('input',{bubbles:true}));
-            el.dispatchEvent(new Event('change',{bubbles:true}));
-            el.dispatchEvent(new Event('blur',{bubbles:true}));
-        """, el, valor)
+        time.sleep(0.1)
+    except Exception: pass
+    driver.execute_script("arguments[0].value = '';", el)
+    driver.execute_script(
+        "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el
+    )
+    time.sleep(0.2)
+    # Escribir letra por letra
+    for char in valor:
+        el.send_keys(char)
+        time.sleep(random.uniform(0.05, 0.15))
+    time.sleep(0.3)
 
 def buscar(driver, selectores, timeout=12, visibles=True):
     fin = time.time() + timeout
@@ -119,16 +138,17 @@ def buscar(driver, selectores, timeout=12, visibles=True):
                     if (visibles and el.is_displayed()) or not visibles:
                         return el
             except Exception: pass
-        time.sleep(0.25)
+        time.sleep(0.3)
     return None
 
 def cerrar_popups(driver):
     try: driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
     except Exception: pass
+    time.sleep(0.3)
     for by, sel in [
         (By.CSS_SELECTOR, "[aria-label*='close' i],[aria-label*='cerrar' i]"),
         (By.CSS_SELECTOR, "button[class*='close' i],.close,.cerrar"),
-        (By.XPATH, "//button[normalize-space(.)='×' or contains(translate(.,'CERRAR','cerrar'),'cerrar')]")
+        (By.XPATH, "//button[normalize-space(.)='×']"),
     ]:
         try:
             for el in driver.find_elements(by, sel):
@@ -137,49 +157,122 @@ def cerrar_popups(driver):
                     except Exception: pass
         except Exception: pass
 
+def cerrar_alerta_si_existe(driver):
+    try:
+        WebDriverWait(driver, 3).until(EC.alert_is_present())
+        alerta = driver.switch_to.alert
+        print(f'⚠️ Alerta detectada: {alerta.text}')
+        alerta.accept()
+        time.sleep(0.5)
+        return True
+    except Exception:
+        return False
+
 def login_confirmado(driver):
     txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
-    if '/reult2' in (driver.current_url or '').lower(): return True
-    return any(m in txt for m in ['consultar placa','reporte vehicular','impuesto vehicular','sat lima','sutran'])
+    url = (driver.current_url or '').lower()
+    if 'reult2' in url or 'result2' in url: return True
+    return any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran'])
 
 def hacer_login(driver, usuario, contrasena):
+    print('🌐 Cargando página de login...')
     driver.get(URL_LOGIN)
-    esperar_documento_listo(driver, 25)
-    time.sleep(2)
+    esperar_documento_listo(driver, 30)
+    time.sleep(3)
+    cerrar_alerta_si_existe(driver)
     cerrar_popups(driver)
+
+    # Mover el mouse aleatoriamente para parecer humano
+    try:
+        ActionChains(driver).move_by_offset(
+            random.randint(100, 400), random.randint(100, 300)
+        ).perform()
+    except Exception: pass
+    time.sleep(0.5)
+
     campo_user = buscar(driver, [
         (By.CSS_SELECTOR, 'input#email'),
         (By.CSS_SELECTOR, 'input[type="email"]'),
-        (By.XPATH, "//input[@id='email' or @placeholder='Correo']"),
-    ], timeout=8, visibles=False)
+        (By.XPATH, "//input[@placeholder='Correo' or @placeholder='Email' or @placeholder='Usuario']"),
+    ], timeout=10, visibles=False)
+
     campo_pass = buscar(driver, [
         (By.CSS_SELECTOR, 'input#password'),
         (By.CSS_SELECTOR, 'input[type="password"]'),
-    ], timeout=8, visibles=False)
+    ], timeout=10, visibles=False)
+
     if not campo_user or not campo_pass:
-        raise Exception('No se encontraron campos de login')
-    escribir_input(driver, campo_user, usuario)
-    escribir_input(driver, campo_pass, contrasena)
-    time.sleep(0.4)
+        raise Exception('No se encontraron los campos de login en la página')
+
+    print('✍️ Escribiendo credenciales...')
+
+    # Hacer scroll hasta el formulario
+    driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", campo_user)
+    time.sleep(1.0)
+
+    # Escribir usuario como humano
+    escribir_humano(driver, campo_user, usuario)
+    time.sleep(random.uniform(0.5, 1.0))
+
+    # Mover al campo contraseña y escribir
+    ActionChains(driver).move_to_element(campo_pass).perform()
+    time.sleep(0.5)
+    escribir_humano(driver, campo_pass, contrasena)
+    time.sleep(random.uniform(0.5, 1.2))
+
+    # Verificar que los valores estén bien escritos
+    val_user = driver.execute_script("return arguments[0].value;", campo_user)
+    val_pass = driver.execute_script("return arguments[0].value;", campo_pass)
+    print(f'📋 Usuario ingresado: {val_user}')
+    print(f'📋 Contraseña ingresada: {"*" * len(val_pass)}')
+
+    if val_user != usuario:
+        print('⚠️ Usuario no coincide, reintentando...')
+        driver.execute_script(f"arguments[0].value = '{usuario}';", campo_user)
+        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{{bubbles:true}}));", campo_user)
+
+    if val_pass != contrasena:
+        print('⚠️ Contraseña no coincide, reintentando...')
+        driver.execute_script(f"arguments[0].value = arguments[1];", campo_pass, contrasena)
+        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{{bubbles:true}}));", campo_pass)
+
+    time.sleep(0.5)
+
+    # Click en botón de login
     enviado = False
     for by, sel in [
         (By.XPATH, "//button[contains(translate(.,'INGRESAR','ingresar'),'ingresar')]"),
-        (By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]')
+        (By.XPATH, "//button[contains(translate(.,'INICIAR','iniciar'),'iniciar')]"),
+        (By.CSS_SELECTOR, 'button[type="submit"]'),
+        (By.CSS_SELECTOR, 'input[type="submit"]'),
     ]:
         try:
             for btn in driver.find_elements(by, sel):
                 if btn.is_displayed():
-                    js_click(driver, btn); enviado = True; break
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                    time.sleep(0.3)
+                    js_click(driver, btn)
+                    enviado = True
+                    break
             if enviado: break
         except Exception: pass
-    if not enviado: campo_pass.send_keys(Keys.ENTER)
+
+    if not enviado:
+        campo_pass.send_keys(Keys.ENTER)
+
     time.sleep(2)
+    cerrar_alerta_si_existe(driver)
     esperar_documento_listo(driver, 25)
-    fin = time.time() + 25
+
+    fin = time.time() + 30
     while time.time() < fin:
-        if login_confirmado(driver): return
-        time.sleep(0.8)
-    raise Exception('Login no confirmado')
+        cerrar_alerta_si_existe(driver)
+        if login_confirmado(driver):
+            print('✅ Login exitoso')
+            return
+        time.sleep(1.0)
+
+    raise Exception(f'Login no confirmado. URL actual: {driver.current_url}')
 
 def resumen_estado_carga(driver):
     texto = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
@@ -220,36 +313,41 @@ def consultar_placa(driver, placa):
     if login_confirmado(driver):
         campo = buscar(driver, [
             (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
-            (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]")
+            (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
         ], timeout=3, visibles=False)
     if not campo:
         for url in [URL_CONSULTA, f'{URL_BASE}/result2.html']:
             try:
                 driver.get(url)
                 esperar_documento_listo(driver, 20)
-                time.sleep(1.5)
+                time.sleep(2)
                 campo = buscar(driver, [
                     (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
-                    (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]")
-                ], timeout=4, visibles=False)
+                    (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
+                ], timeout=5, visibles=False)
                 if campo: break
             except Exception: pass
     if not campo:
         raise Exception('No se encontró el campo de placa')
-    escribir_input(driver, campo, placa)
-    time.sleep(0.4)
+
+    escribir_humano(driver, campo, placa)
+    time.sleep(0.5)
+
     enviado = False
     for by, sel in [
         (By.XPATH, "//button[contains(translate(.,'CONSULTARBUSCAR','consultarbuscar'),'consultar') or contains(translate(.,'CONSULTARBUSCAR','consultarbuscar'),'buscar')]"),
-        (By.CSS_SELECTOR, 'button[type="submit"]')
+        (By.CSS_SELECTOR, 'button[type="submit"]'),
     ]:
         try:
             for btn in driver.find_elements(by, sel):
                 txt = texto_normalizado(btn.text or '')
                 if btn.is_displayed() and 'registr' not in txt and 'pagar' not in txt:
-                    js_click(driver, btn); enviado = True; break
+                    js_click(driver, btn)
+                    enviado = True
+                    break
             if enviado: break
         except Exception: pass
+
     if not enviado: campo.send_keys(Keys.ENTER)
     time.sleep(4)
     esperar_documento_listo(driver, 25)
@@ -287,7 +385,9 @@ def descargar_pdf(driver, placa):
                     txt = texto_normalizado(el.text or el.get_attribute('aria-label') or '')
                     if ('reporte' in txt or el.get_attribute('download')) and el.is_displayed():
                         disabled = el.get_attribute('disabled') or 'disabled' in (el.get_attribute('class') or '').lower()
-                        if not disabled: btn = el; break
+                        if not disabled:
+                            btn = el
+                            break
                 if btn: break
             except Exception: pass
         if btn: break
@@ -313,10 +413,6 @@ def pdf_a_base64(pdf_path):
         return base64.b64encode(f.read()).decode('utf-8')
 
 def ejecutar_consulta_completa(placa, usuario, contrasena):
-    """
-    Función principal que ejecuta todo el flujo:
-    Login → Consulta → Descarga PDF → Retorna ruta del PDF
-    """
     placa  = placa.strip().upper()
     driver = crear_driver()
     try:
