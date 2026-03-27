@@ -223,70 +223,59 @@ def login_confirmado(driver):
         return False
 
 def llenar_campo_login(driver, campo, valor, nombre):
-    # Estrategia 1: focus + ActionChains completo
+    # Estrategia 1: CDP mouse click + insertText
     try:
-        driver.execute_script("arguments[0].removeAttribute('readonly');", campo)
-        driver.execute_script("arguments[0].removeAttribute('disabled');", campo)
-        driver.execute_script("arguments[0].focus(); arguments[0].click();", campo)
-        time.sleep(0.5)
-        ActionChains(driver)\
-            .click(campo)\
-            .pause(0.3)\
-            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
-            .pause(0.1)\
-            .send_keys(Keys.DELETE)\
-            .pause(0.2)\
-            .send_keys(valor)\
-            .pause(0.3)\
-            .perform()
-        time.sleep(0.6)
-        val = driver.execute_script("return arguments[0].value;", campo)
-        if val == valor:
-            print(f'{nombre} OK (ActionChains+focus): {val if nombre == "Usuario" else "*" * len(val)}')
-            return True
-    except Exception as e:
-        print(f'Estrategia 1 falló ({nombre}): {e}')
-
-    # Estrategia 2: label click + char por char
-    try:
-        campo_id = campo.get_attribute('id') or ''
-        if campo_id:
-            try:
-                label = driver.find_element(By.CSS_SELECTOR, f'label[for="{campo_id}"]')
-                label.click()
-                time.sleep(0.3)
-            except Exception:
-                pass
-        campo.click()
+        rect = driver.execute_script("""
+            var r = arguments[0].getBoundingClientRect();
+            return {x: r.left + r.width/2, y: r.top + r.height/2};
+        """, campo)
+        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {
+            'type': 'mousePressed', 'x': rect['x'], 'y': rect['y'],
+            'button': 'left', 'clickCount': 1
+        })
+        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {
+            'type': 'mouseReleased', 'x': rect['x'], 'y': rect['y'],
+            'button': 'left', 'clickCount': 1
+        })
         time.sleep(0.4)
-        campo.send_keys(Keys.HOME)
-        campo.send_keys(Keys.SHIFT, Keys.END)
-        campo.send_keys(Keys.BACK_SPACE)
-        time.sleep(0.2)
-        for char in valor:
-            ActionChains(driver).send_keys_to_element(campo, char).perform()
-            time.sleep(random.uniform(0.06, 0.14))
+        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
+            'type': 'keyDown', 'modifiers': 2, 'key': 'a', 'code': 'KeyA'
+        })
+        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
+            'type': 'keyUp', 'modifiers': 2, 'key': 'a', 'code': 'KeyA'
+        })
+        time.sleep(0.1)
+        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
+            'type': 'keyDown', 'key': 'Backspace', 'code': 'Backspace'
+        })
+        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
+            'type': 'keyUp', 'key': 'Backspace', 'code': 'Backspace'
+        })
+        time.sleep(0.1)
+        driver.execute_cdp_cmd('Input.insertText', {'text': valor})
         time.sleep(0.5)
         val = driver.execute_script("return arguments[0].value;", campo)
         if val:
-            print(f'{nombre} OK (label+char): {val if nombre == "Usuario" else "*" * len(val)}')
+            print(f'{nombre} OK (CDP): {val if nombre == "Usuario" else "*" * len(val)}')
             return True
+        print(f'{nombre} CDP ejecutado (continuando...)')
+        return True
     except Exception as e:
-        print(f'Estrategia 2 falló ({nombre}): {e}')
+        print(f'CDP falló ({nombre}): {e}')
 
-    # Estrategia 3: JS nativeSetter React/Vue/Angular
+    # Estrategia 2: JS nativeSetter React/Vue/Angular
     try:
         driver.execute_script("""
             var el = arguments[0];
             var val = arguments[1];
-            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            el.focus(); el.click();
+            var setter = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value'
             ).set;
-            nativeInputValueSetter.call(el, val);
-            el.dispatchEvent(new Event('focus', { bubbles: true }));
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+            setter.call(el, val);
+            ['focus','input','change','keyup','blur'].forEach(function(ev) {
+                el.dispatchEvent(new Event(ev, {bubbles: true}));
+            });
         """, campo, valor)
         time.sleep(0.5)
         val = driver.execute_script("return arguments[0].value;", campo)
@@ -294,44 +283,40 @@ def llenar_campo_login(driver, campo, valor, nombre):
             print(f'{nombre} OK (nativeSetter): {val if nombre == "Usuario" else "*" * len(val)}')
             return True
     except Exception as e:
-        print(f'Estrategia 3 falló ({nombre}): {e}')
+        print(f'nativeSetter falló ({nombre}): {e}')
 
-    # Estrategia 4: xdotool (solo Linux)
-    try:
-        import subprocess
-        driver.execute_script("arguments[0].focus(); arguments[0].click();", campo)
-        time.sleep(0.3)
-        subprocess.run(['xdotool', 'type', '--clearmodifiers', valor],
-                       capture_output=True, timeout=5)
-        time.sleep(0.5)
-        val = driver.execute_script("return arguments[0].value;", campo)
-        if val:
-            print(f'{nombre} OK (xdotool): {val if nombre == "Usuario" else "*" * len(val)}')
-            return True
-    except Exception:
-        pass
-
-    # Estrategia 5: CDP Input.insertText (último recurso)
+    # Estrategia 3: ActionChains char por char
     try:
         driver.execute_script("arguments[0].focus(); arguments[0].click();", campo)
-        time.sleep(0.3)
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
-        time.sleep(0.1)
-        ActionChains(driver).send_keys(Keys.DELETE).perform()
-        time.sleep(0.1)
-        driver.execute_cdp_cmd('Input.insertText', {'text': valor})
-        time.sleep(0.5)
+        time.sleep(0.4)
+        ActionChains(driver)\
+            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
+            .send_keys(Keys.DELETE).perform()
+        time.sleep(0.2)
+        for char in valor:
+            ActionChains(driver).send_keys_to_element(campo, char).perform()
+            time.sleep(random.uniform(0.05, 0.12))
+        time.sleep(0.4)
         val = driver.execute_script("return arguments[0].value;", campo)
         if val:
-            print(f'{nombre} OK (CDP insertText): {val if nombre == "Usuario" else "*" * len(val)}')
+            print(f'{nombre} OK (char-por-char): {val if nombre == "Usuario" else "*" * len(val)}')
             return True
     except Exception as e:
-        print(f'Estrategia CDP falló ({nombre}): {e}')
+        print(f'char-por-char falló ({nombre}): {e}')
 
     print(f'❌ TODAS las estrategias fallaron para {nombre}')
     return False
 
 def hacer_login(driver, usuario, contrasena):
+    # ✅ Limpiar estado previo para simular sesión fresca
+    try:
+        driver.delete_all_cookies()
+        driver.execute_script("window.localStorage.clear();")
+        driver.execute_script("window.sessionStorage.clear();")
+        print('🧹 Cookies y storage limpiados')
+    except Exception:
+        pass
+
     print('Cargando pagina de login...')
     driver.get(URL_LOGIN)
     esperar_documento_listo(driver, 30)
@@ -352,19 +337,21 @@ def hacer_login(driver, usuario, contrasena):
         raise Exception('No se encontraron los campos de login')
 
     print('Escribiendo credenciales...')
-    ok_user = llenar_campo_login(driver, campo_user, usuario, 'Usuario')
-    time.sleep(0.5)
+    llenar_campo_login(driver, campo_user, usuario, 'Usuario')
+    time.sleep(0.8)
 
     # Re-buscar contraseña por si el DOM se actualizó
     campo_pass = buscar(driver, [
         (By.CSS_SELECTOR, 'input#password'),
         (By.CSS_SELECTOR, 'input[type="password"]'),
     ], timeout=5, visibles=False)
-    ok_pass = llenar_campo_login(driver, campo_pass, contrasena, 'Contrasena')
-    time.sleep(0.5)
+    llenar_campo_login(driver, campo_pass, contrasena, 'Contrasena')
+    time.sleep(0.8)
 
-    if not ok_user:
-        print('⚠️ Usuario posiblemente vacío, intentando login de todas formas...')
+    val_u = driver.execute_script("return arguments[0].value;", campo_user)
+    val_p = driver.execute_script("return arguments[0].value;", campo_pass)
+    print(f'✔ Usuario en campo: [{val_u}]')
+    print(f'✔ Contrasena en campo: [{len(val_p) if val_p else 0} chars]')
 
     # Enviar formulario
     enviado = False
@@ -566,8 +553,10 @@ def pdf_a_base64(pdf_path):
 
 # ── Consulta con sesión activa ─────────────────────────────
 def ejecutar_consulta_completa(placa, usuario, contrasena):
-    placa  = placa.strip().upper()
-    driver = obtener_driver()
+    placa    = placa.strip().upper()
+    usuario  = usuario.strip()
+    contrasena = contrasena.strip()
+    driver   = obtener_driver()
     try:
         try:
             if not login_confirmado(driver):
