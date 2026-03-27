@@ -14,14 +14,35 @@ URL_BASE     = 'https://www.consultavehicular.services'
 URL_LOGIN    = f'{URL_BASE}/'
 URL_CONSULTA = f'{URL_BASE}/reult2.html'
 
+# ── Driver global (sesión activa) ──────────────────────────
+DRIVER_GLOBAL = None
+LOCK_DRIVER   = None
+
+def inicializar_driver_global():
+    """Crear driver una sola vez al arranque del servidor"""
+    global DRIVER_GLOBAL, LOCK_DRIVER
+    import threading
+    LOCK_DRIVER = threading.Lock()
+    if DRIVER_GLOBAL is None:
+        print('🚀 Creando driver global para sesión persistente...')
+        DRIVER_GLOBAL = crear_driver()
+    return DRIVER_GLOBAL
+
+def obtener_driver():
+    """Obtener el driver global de forma thread-safe"""
+    global DRIVER_GLOBAL
+    if DRIVER_GLOBAL is None:
+        return inicializar_driver_global()
+    return DRIVER_GLOBAL
+
 def timestamp():
     return datetime.now().strftime('%Y%m%d_%H%M%S')
 
 def texto_normalizado(txt):
-    return re.sub(r'\s+', ' ', (txt or '').strip()).lower()
+    return re.sub(r'\\s+', ' ', (txt or '').strip()).lower()
 
 def limpiar_campo(txt):
-    return re.sub(r'\s+', ' ', (txt or '').strip()).strip(' :')
+    return re.sub(r'\\s+', ' ', (txt or '').strip()).strip(' :')
 
 def crear_driver():
     download_dir = os.path.abspath('descargas_cv')
@@ -379,7 +400,6 @@ def esperar_descarga_pdf(driver, antes, timeout=150):
     return None
 
 def descargar_pdf(driver, placa):
-    # ---- CORREGIDO: selector exacto del botón "Generar Reporte" ----
     selectores = [
         (By.XPATH, "//button[contains(normalize-space(.), 'Generar Reporte')]"),
         (By.XPATH, "//button[contains(normalize-space(.), 'Generar')]"),
@@ -435,14 +455,32 @@ def pdf_a_base64(pdf_path):
     with open(pdf_path, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
 
+# ── NUEVA FUNCIÓN: ejecutar con sesión activa ──────────────
 def ejecutar_consulta_completa(placa, usuario, contrasena):
+    """
+    Ejecuta consulta con sesión persistente.
+    - Login UNA sola vez al arrancar el servidor
+    - Todas las consultas reutilizan la misma sesión
+    - Detecta sesión expirada y re-login automático
+    """
     placa = placa.strip().upper()
-    driver = crear_driver()
+    driver = obtener_driver()
+    
     try:
-        print(f'Login para placa {placa}...')
-        hacer_login(driver, usuario, contrasena)
+        # Verificar si ya está logueado
+        try:
+            if not login_confirmado(driver):
+                print(f'⚠️ Sesión no activa, haciendo login...')
+                hacer_login(driver, usuario, contrasena)
+            else:
+                print(f'✅ Sesión activa, continuando...')
+        except Exception as e:
+            print(f'❌ Error verificando sesión: {e}. Re-logueando...')
+            hacer_login(driver, usuario, contrasena)
+
         print(f'Consultando placa {placa}...')
         consultar_placa(driver, placa)
+        
         print('Descargando PDF...')
         pdf_path = descargar_pdf(driver, placa)
         if pdf_path:
@@ -451,8 +489,9 @@ def ejecutar_consulta_completa(placa, usuario, contrasena):
         else:
             print('No se pudo descargar el PDF')
             return None
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+            
+    except Exception as e:
+        print(f'❌ Error en consulta: {e}')
+        import traceback
+        traceback.print_exc()
+        return None
