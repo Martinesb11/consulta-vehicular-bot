@@ -1,5 +1,6 @@
 import os
 import time
+import base64
 import threading
 import requests
 from flask import Flask, request, jsonify
@@ -7,49 +8,45 @@ from consulta import ejecutar_consulta_completa
 
 app = Flask(__name__)
 
-USUARIO_CV       = os.environ.get('CV_USUARIO', '')
-CONTRASENA_CV    = os.environ.get('CV_CONTRASENA', '')
+USUARIO_CV        = os.environ.get('CV_USUARIO', '')
+CONTRASENA_CV     = os.environ.get('CV_CONTRASENA', '')
 ULTRAMSG_INSTANCE = os.environ.get('ULTRAMSG_INSTANCE', '')
-ULTRAMSG_TOKEN   = os.environ.get('ULTRAMSG_TOKEN', '')
-GRUPO_AUTORIZADO = '120363406557895449@g.us'
+ULTRAMSG_TOKEN    = os.environ.get('ULTRAMSG_TOKEN', '')
+GRUPO_AUTORIZADO  = '120363406557895449@g.us'
 
 def enviar_mensaje(destino, texto):
     try:
-        requests.post(
+        r = requests.post(
             f'https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat',
             data={'token': ULTRAMSG_TOKEN, 'to': destino, 'body': texto},
             timeout=30
         )
-        print(f'✅ Mensaje enviado a {destino}')
+        print(f'✅ Mensaje enviado a {destino}: {r.status_code}')
     except Exception as e:
         print(f'❌ Error enviando mensaje: {e}')
 
 def enviar_pdf(destino, pdf_path, placa):
     try:
-        # Verificar que el archivo existe
         if not os.path.exists(pdf_path):
             print(f'ERROR: Archivo no encontrado: {pdf_path}')
             return False
-        
-        # Obtener tamaño para debugging
         tamaño = os.path.getsize(pdf_path)
         print(f'Enviando PDF: {pdf_path} ({tamaño} bytes)')
-        
         with open(pdf_path, 'rb') as f:
-            files = {'document': (os.path.basename(pdf_path), f, 'application/pdf')}
-            data  = {
-                'token': ULTRAMSG_TOKEN, 
-                'to': destino, 
-                'caption': f'📄 Reporte vehicular - Placa {placa}'
-            }
-            r = requests.post(
-                f'https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/document',
-                data=data, 
-                files=files, 
-                timeout=120
-            )
-            print(f'Respuesta UltraMsg: {r.status_code} - {r.text}')
-            return r.status_code in [200, 201]
+            pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+        r = requests.post(
+            f'https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/document',
+            data={
+                'token':    ULTRAMSG_TOKEN,
+                'to':       destino,
+                'document': f'data:application/pdf;base64,{pdf_b64}',
+                'filename': f'Reporte_{placa}.pdf',
+                'caption':  f'📄 Reporte vehicular - Placa {placa}'
+            },
+            timeout=120
+        )
+        print(f'Respuesta UltraMsg: {r.status_code} - {r.text}')
+        return r.status_code in [200, 201]
     except Exception as e:
         print(f'❌ ERROR enviando PDF: {e}')
         import traceback
@@ -62,14 +59,11 @@ def procesar_consulta(placa, destino):
         pdf_path = ejecutar_consulta_completa(placa, USUARIO_CV, CONTRASENA_CV)
         if pdf_path and os.path.exists(pdf_path):
             print(f'PDF generado en: {pdf_path}')
-            # Esperar un poco antes de enviar
             time.sleep(2)
-            # Enviar PDF
             if enviar_pdf(destino, pdf_path, placa):
                 print(f'✅ PDF enviado exitosamente')
             else:
                 enviar_mensaje(destino, f'❌ Error enviando el PDF para *{placa}*')
-            # Limpiar
             try:
                 os.remove(pdf_path)
             except:
@@ -85,36 +79,36 @@ def procesar_consulta(placa, destino):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        data = request.json or {}
+        data     = request.json or {}
         msg_data = data.get('data', {})
-        
-        # Ignorar si no es del grupo autorizado
+
+        # Ignorar si no es del grupo ConsultasACL
         if msg_data.get('from') != GRUPO_AUTORIZADO:
             print(f'Ignorado (no autorizado): {msg_data.get("from")}')
             return jsonify({'status': 'ignorado'}), 200
-        
-        # Ignorar mensajes propios
+
+        # Ignorar mensajes propios del bot
         if msg_data.get('fromMe'):
             return jsonify({'status': 'ignorado'}), 200
-        
-        body = (msg_data.get('body') or '').strip().upper()
+
+        body  = (msg_data.get('body') or '').strip().upper()
         autor = msg_data.get('author', msg_data.get('from'))
         print(f'Mensaje de {autor}: {body}')
-        
+
         if body.startswith('CONSULTA '):
             placa = body.replace('CONSULTA ', '').strip()
             if 6 <= len(placa) <= 8:
                 hilo = threading.Thread(
-                    target=procesar_consulta, 
-                    args=(placa, GRUPO_AUTORIZADO), 
+                    target=procesar_consulta,
+                    args=(placa, GRUPO_AUTORIZADO),
                     daemon=True
                 )
                 hilo.start()
             else:
                 enviar_mensaje(GRUPO_AUTORIZADO, '⚠️ Formato: *CONSULTA ABC123*')
-        
+
         return jsonify({'status': 'ok'}), 200
-    
+
     except Exception as e:
         print(f'❌ Error en webhook: {e}')
         import traceback
