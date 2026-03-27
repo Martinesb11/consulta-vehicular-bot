@@ -16,12 +16,13 @@ CONTRASENA_CV     = os.environ.get('CV_CONTRASENA', '')
 ULTRAMSG_INSTANCE = os.environ.get('ULTRAMSG_INSTANCE', '')
 ULTRAMSG_TOKEN    = os.environ.get('ULTRAMSG_TOKEN', '')
 GRUPO_AUTORIZADO  = '120363406557895449@g.us'
+LIMITE_DIARIO     = 15
 
-# ⚠️ ACTUALIZA CON TUS NÚMEROS (sin + ni espacios)
+# ⚠️ ACTUALIZA CON TUS NÚMEROS
 MIEMBROS = {
     '51982008561': 'Juan',
-    '51935203969': 'Admin',
-    # '51999999999': 'Nombre',  ← agrega más aquí
+    '51935203969': 'Alf',
+    # '51999999999': 'Nombre',
 }
 
 # ── Cola de consultas (1 a la vez) ─────────────────────────
@@ -39,6 +40,60 @@ def worker():
 
 hilo_worker = threading.Thread(target=worker, daemon=True)
 hilo_worker.start()
+
+# ── Límite diario por usuario ──────────────────────────────
+# { 'numero': {'fecha': 'YYYY-MM-DD', 'count': N} }
+contadores = {}
+lock_contadores = threading.Lock()
+
+def verificar_limite(numero):
+    """Retorna True si puede consultar, False si alcanzó el límite"""
+    hoy = datetime.now().strftime('%Y-%m-%d')
+    with lock_contadores:
+        datos = contadores.get(numero, {'fecha': hoy, 'count': 0})
+        # Resetear si es un nuevo día
+        if datos['fecha'] != hoy:
+            datos = {'fecha': hoy, 'count': 0}
+        if datos['count'] >= LIMITE_DIARIO:
+            return False
+        datos['count'] += 1
+        contadores[numero] = datos
+        return True
+
+def consultas_restantes(numero):
+    hoy = datetime.now().strftime('%Y-%m-%d')
+    with lock_contadores:
+        datos = contadores.get(numero, {'fecha': hoy, 'count': 0})
+        if datos['fecha'] != hoy:
+            return LIMITE_DIARIO
+        return max(0, LIMITE_DIARIO - datos['count'])
+
+# ── Anti-duplicados (caché 24h) ────────────────────────────
+# { 'PLACA': {'timestamp': float, 'pdf_b64': str, 'fecha': str} }
+cache_pdfs = {}
+lock_cache = threading.Lock()
+CACHE_HORAS = 24
+
+def obtener_cache(placa):
+    """Retorna pdf_b64 si está en caché y no expiró, sino None"""
+    with lock_cache:
+        dato = cache_pdfs.get(placa)
+        if not dato:
+            return None
+        horas_pasadas = (time.time() - dato['timestamp']) / 3600
+        if horas_pasadas > CACHE_HORAS:
+            del cache_pdfs[placa]
+            return None
+        return dato
+
+def guardar_cache(placa, pdf_b64):
+    with lock_cache:
+        cache_pdfs[placa] = {
+            'timestamp': time.time(),
+            'pdf_b64':   pdf_b64,
+            'fecha':     datetime.now().strftime('%d/%m/%Y %I:%M %p')
+        }
+        print(f'💾 Caché guardado para {placa}')
 
 # ── Log de uso ─────────────────────────────────────────────
 def registrar_log(numero, placa, resultado, segundos):
@@ -64,17 +119,11 @@ def enviar_mensaje(destino, texto):
     except Exception as e:
         print(f'❌ Error enviando mensaje: {e}')
 
-def enviar_pdf(destino, pdf_path, placa, autor_numero):
+def enviar_pdf_b64(destino, pdf_b64, placa, autor_numero, desde_cache=False):
     try:
-        if not os.path.exists(pdf_path):
-            print(f'ERROR: Archivo no encontrado: {pdf_path}')
-            return False
-        tamaño = os.path.getsize(pdf_path)
-        print(f'Enviando PDF: {pdf_path} ({tamaño} bytes)')
-        with open(pdf_path, 'rb') as f:
-            pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
         nombre_autor = MIEMBROS.get(autor_numero, autor_numero)
-        ahora = datetime.now().strftime('%d/%m/%Y %I:%M %p')
+        ahora        = datetime.now().strftime('%d/%m/%Y %I:%M %p')
+        cache_tag    = '\n⚡ _Resultado en caché_' if desde_cache else ''
         r = requests.post(
             f'https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/document',
             data={
@@ -82,7 +131,7 @@ def enviar_pdf(destino, pdf_path, placa, autor_numero):
                 'to':       destino,
                 'document': f'data:application/pdf;base64,{pdf_b64}',
                 'filename': f'Reporte_{placa}.pdf',
-                'caption':  f'📄 Reporte vehicular - Placa {placa}\n🙋 Solicitado por: {nombre_autor}\n📅 {ahora}'
+                'caption':  f'📄 Reporte vehicular - Placa {placa}\n🙋 Solicitado por: {nombre_autor}\n📅 {ahora}{cache_tag}'
             },
             timeout=120
         )
@@ -97,17 +146,34 @@ def enviar_pdf(destino, pdf_path, placa, autor_numero):
 # ── Procesar consulta ──────────────────────────────────────
 def procesar_consulta(placa, destino, autor):
     inicio = time.time()
+
+    # Verificar caché primero
+    cached = obtener_cache(placa)
+    if cached:
+        print(f'⚡ Placa {placa} encontrada en caché')
+        if enviar_pdf_b64(destino, cached['pdf_b64'], placa, autor, desde_cache=True):
+            registrar_log(autor, placa, 'cache_hit', 0)
+        else:
+            enviar_mensaje(destino, f'❌ Error enviando PDF para *{placa}*')
+        return
+
+    # Consulta completa
     try:
         pdf_path = ejecutar_consulta_completa(placa, USUARIO_CV, CONTRASENA_CV)
         segundos = int(time.time() - inicio)
         if pdf_path and os.path.exists(pdf_path):
             print(f'PDF generado en: {pdf_path}')
             time.sleep(2)
-            if enviar_pdf(destino, pdf_path, placa, autor):
+            with open(pdf_path, 'rb') as f:
+                pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+            # Guardar en caché
+            guardar_cache(placa, pdf_b64)
+            # Enviar
+            if enviar_pdf_b64(destino, pdf_b64, placa, autor):
                 print(f'✅ PDF enviado exitosamente')
                 registrar_log(autor, placa, 'exitoso', segundos)
             else:
-                enviar_mensaje(destino, f'❌ Error enviando el PDF para *{placa}*')
+                enviar_mensaje(destino, f'❌ Error enviando PDF para *{placa}*')
                 registrar_log(autor, placa, 'error_envio', segundos)
             try:
                 os.remove(pdf_path)
@@ -147,6 +213,17 @@ def webhook():
         if body.startswith('CONSULTA '):
             placa = body.replace('CONSULTA ', '').strip()
             if 6 <= len(placa) <= 8:
+                # Verificar límite diario
+                if not verificar_limite(autor):
+                    restantes = consultas_restantes(autor)
+                    nombre = MIEMBROS.get(autor, autor)
+                    enviar_mensaje(GRUPO_AUTORIZADO,
+                        f'🚫 *{nombre}* alcanzaste el límite de {LIMITE_DIARIO} consultas por hoy.\n'
+                        f'🔄 Tu contador se resetea a medianoche.'
+                    )
+                    return jsonify({'status': 'limite_alcanzado'}), 200
+
+                # Agregar a cola
                 posicion = cola.qsize() + 1
                 if posicion > 1:
                     tiempo_est = posicion * 5
@@ -155,9 +232,16 @@ def webhook():
                         f'⏳ Posición #{posicion} — espera ~{tiempo_est} minutos'
                     )
                 else:
-                    enviar_mensaje(GRUPO_AUTORIZADO,
-                        f'⏳ Consultando *{placa}*...\nEspera 2-3 minutos.'
-                    )
+                    # Verificar caché antes de avisar tiempo de espera
+                    cached = obtener_cache(placa)
+                    if cached:
+                        enviar_mensaje(GRUPO_AUTORIZADO,
+                            f'⚡ Placa *{placa}* encontrada en caché, enviando ahora...'
+                        )
+                    else:
+                        enviar_mensaje(GRUPO_AUTORIZADO,
+                            f'⏳ Consultando *{placa}*...\nEspera 2-3 minutos.'
+                        )
                 cola.put((placa, GRUPO_AUTORIZADO, autor))
             else:
                 enviar_mensaje(GRUPO_AUTORIZADO, '⚠️ Formato: *CONSULTA ABC123*')
@@ -174,9 +258,10 @@ def webhook():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
-        'status': 'ok',
-        'grupo': GRUPO_AUTORIZADO,
-        'cola_pendientes': cola.qsize()
+        'status':          'ok',
+        'grupo':           GRUPO_AUTORIZADO,
+        'cola_pendientes': cola.qsize(),
+        'cache_placas':    list(cache_pdfs.keys())
     }), 200
 
 # ── Inicio ─────────────────────────────────────────────────
