@@ -26,28 +26,28 @@ def limpiar_campo(txt):
 def crear_driver():
     download_dir = os.path.abspath('descargas_cv')
     os.makedirs(download_dir, exist_ok=True)
-  base = [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--disable-software-rasterizer',
-    '--disable-extensions',
-    '--disable-plugins',
-    '--no-zygote',
-    '--disable-blink-features=AutomationControlled',
-    '--window-size=1280,900',
-    '--lang=es-PE',
-    '--no-first-run',
-    '--disable-background-networking',
-    '--disable-sync',
-    '--disable-translate',
-    '--hide-scrollbars',
-    '--metrics-recording-only',
-    '--mute-audio',
-    '--safebrowsing-disable-auto-update',
-    '--js-flags=--max-old-space-size=256',
-]
+    base = [
+        '--headless=new',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--no-zygote',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1280,900',
+        '--lang=es-PE',
+        '--no-first-run',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--safebrowsing-disable-auto-update',
+        '--js-flags=--max-old-space-size=256',
+    ]
     ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     prefs = {
         'download.default_directory': download_dir,
@@ -58,12 +58,14 @@ def crear_driver():
     }
     def _opts(binary=None):
         opts = Options()
-        for a in base: opts.add_argument(a)
+        for a in base:
+            opts.add_argument(a)
         opts.add_argument(f'--user-agent={ua}')
         opts.add_experimental_option('prefs', prefs)
         opts.add_experimental_option('excludeSwitches', ['enable-automation'])
         opts.add_experimental_option('useAutomationExtension', False)
-        if binary: opts.binary_location = binary
+        if binary:
+            opts.binary_location = binary
         return opts
     try:
         d = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=_opts())
@@ -85,10 +87,12 @@ def crear_driver():
                 window.chrome = { runtime: {} };
             """
         })
-    except Exception: pass
+    except Exception:
+        pass
     try:
         d.execute_cdp_cmd('Page.setDownloadBehavior', {'behavior': 'allow', 'downloadPath': download_dir})
-    except Exception: pass
+    except Exception:
+        pass
     d._download_dir = download_dir
     return d
 
@@ -103,33 +107,35 @@ def js_click(driver, el):
     try:
         el.click()
         return
-    except Exception: pass
+    except Exception:
+        pass
     try:
         ActionChains(driver).move_to_element(el).pause(0.2).click(el).perform()
         return
-    except Exception: pass
+    except Exception:
+        pass
     driver.execute_script("arguments[0].click();", el)
 
 def escribir_humano(driver, el, valor):
-    """Escribe como humano: letra por letra con pequeñas pausas"""
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
     time.sleep(0.3)
-    try: el.click()
-    except Exception: pass
+    try:
+        el.click()
+    except Exception:
+        pass
     time.sleep(0.2)
-    # Limpiar campo completamente
     try:
         el.send_keys(Keys.CONTROL, 'a')
         time.sleep(0.1)
         el.send_keys(Keys.DELETE)
         time.sleep(0.1)
-    except Exception: pass
+    except Exception:
+        pass
     driver.execute_script("arguments[0].value = '';", el)
     driver.execute_script(
         "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el
     )
     time.sleep(0.2)
-    # Escribir letra por letra
     for char in valor:
         el.send_keys(char)
         time.sleep(random.uniform(0.05, 0.15))
@@ -143,13 +149,16 @@ def buscar(driver, selectores, timeout=12, visibles=True):
                 for el in driver.find_elements(by, sel):
                     if (visibles and el.is_displayed()) or not visibles:
                         return el
-            except Exception: pass
+            except Exception:
+                pass
         time.sleep(0.3)
     return None
 
 def cerrar_popups(driver):
-    try: driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-    except Exception: pass
+    try:
+        driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+    except Exception:
+        pass
     time.sleep(0.3)
     for by, sel in [
         (By.CSS_SELECTOR, "[aria-label*='close' i],[aria-label*='cerrar' i]"),
@@ -159,15 +168,19 @@ def cerrar_popups(driver):
         try:
             for el in driver.find_elements(by, sel):
                 if el.is_displayed():
-                    try: js_click(driver, el); time.sleep(0.2)
-                    except Exception: pass
-        except Exception: pass
+                    try:
+                        js_click(driver, el)
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 def cerrar_alerta_si_existe(driver):
     try:
         WebDriverWait(driver, 3).until(EC.alert_is_present())
         alerta = driver.switch_to.alert
-        print(f'⚠️ Alerta detectada: {alerta.text}')
+        print(f'Alerta detectada: {alerta.text}')
         alerta.accept()
         time.sleep(0.5)
         return True
@@ -177,74 +190,55 @@ def cerrar_alerta_si_existe(driver):
 def login_confirmado(driver):
     txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
     url = (driver.current_url or '').lower()
-    if 'reult2' in url or 'result2' in url: return True
+    if 'reult2' in url or 'result2' in url:
+        return True
     return any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran'])
 
 def hacer_login(driver, usuario, contrasena):
-    print('🌐 Cargando página de login...')
+    print('Cargando pagina de login...')
     driver.get(URL_LOGIN)
     esperar_documento_listo(driver, 30)
     time.sleep(3)
     cerrar_alerta_si_existe(driver)
     cerrar_popups(driver)
-
-    # Mover el mouse aleatoriamente para parecer humano
     try:
         ActionChains(driver).move_by_offset(
             random.randint(100, 400), random.randint(100, 300)
         ).perform()
-    except Exception: pass
+    except Exception:
+        pass
     time.sleep(0.5)
-
     campo_user = buscar(driver, [
         (By.CSS_SELECTOR, 'input#email'),
         (By.CSS_SELECTOR, 'input[type="email"]'),
         (By.XPATH, "//input[@placeholder='Correo' or @placeholder='Email' or @placeholder='Usuario']"),
     ], timeout=10, visibles=False)
-
     campo_pass = buscar(driver, [
         (By.CSS_SELECTOR, 'input#password'),
         (By.CSS_SELECTOR, 'input[type="password"]'),
     ], timeout=10, visibles=False)
-
     if not campo_user or not campo_pass:
-        raise Exception('No se encontraron los campos de login en la página')
-
-    print('✍️ Escribiendo credenciales...')
-
-    # Hacer scroll hasta el formulario
+        raise Exception('No se encontraron los campos de login')
+    print('Escribiendo credenciales...')
     driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", campo_user)
     time.sleep(1.0)
-
-    # Escribir usuario como humano
     escribir_humano(driver, campo_user, usuario)
     time.sleep(random.uniform(0.5, 1.0))
-
-    # Mover al campo contraseña y escribir
     ActionChains(driver).move_to_element(campo_pass).perform()
     time.sleep(0.5)
     escribir_humano(driver, campo_pass, contrasena)
     time.sleep(random.uniform(0.5, 1.2))
-
-    # Verificar que los valores estén bien escritos
     val_user = driver.execute_script("return arguments[0].value;", campo_user)
     val_pass = driver.execute_script("return arguments[0].value;", campo_pass)
-    print(f'📋 Usuario ingresado: {val_user}')
-    print(f'📋 Contraseña ingresada: {"*" * len(val_pass)}')
-
+    print(f'Usuario ingresado: {val_user}')
+    print(f'Contrasena ingresada: {"*" * len(val_pass)}')
     if val_user != usuario:
-        print('⚠️ Usuario no coincide, reintentando...')
         driver.execute_script(f"arguments[0].value = '{usuario}';", campo_user)
-        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{{bubbles:true}}));", campo_user)
-
+        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo_user)
     if val_pass != contrasena:
-        print('⚠️ Contraseña no coincide, reintentando...')
-        driver.execute_script(f"arguments[0].value = arguments[1];", campo_pass, contrasena)
-        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{{bubbles:true}}));", campo_pass)
-
+        driver.execute_script("arguments[0].value = arguments[1];", campo_pass, contrasena)
+        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo_pass)
     time.sleep(0.5)
-
-    # Click en botón de login
     enviado = False
     for by, sel in [
         (By.XPATH, "//button[contains(translate(.,'INGRESAR','ingresar'),'ingresar')]"),
@@ -260,25 +254,23 @@ def hacer_login(driver, usuario, contrasena):
                     js_click(driver, btn)
                     enviado = True
                     break
-            if enviado: break
-        except Exception: pass
-
+            if enviado:
+                break
+        except Exception:
+            pass
     if not enviado:
         campo_pass.send_keys(Keys.ENTER)
-
     time.sleep(2)
     cerrar_alerta_si_existe(driver)
     esperar_documento_listo(driver, 25)
-
     fin = time.time() + 30
     while time.time() < fin:
         cerrar_alerta_si_existe(driver)
         if login_confirmado(driver):
-            print('✅ Login exitoso')
+            print('Login exitoso')
             return
         time.sleep(1.0)
-
-    raise Exception(f'Login no confirmado. URL actual: {driver.current_url}')
+    raise Exception(f'Login no confirmado. URL: {driver.current_url}')
 
 def resumen_estado_carga(driver):
     texto = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
@@ -286,31 +278,39 @@ def resumen_estado_carga(driver):
         'texto_len': len(texto),
         'tablas': len(driver.find_elements(By.TAG_NAME, 'table')),
         'consultando': texto.count('consultando papeletas'),
-        'modulos': sum(1 for m in ['soat','vehiculo','sutran','revision tecnica','impuesto vehicular','sat lima','sat callao'] if m in texto),
+        'modulos': sum(1 for m in ['soat', 'vehiculo', 'sutran', 'revision tecnica', 'impuesto vehicular', 'sat lima', 'sat callao'] if m in texto),
     }
 
 def esperar_reporte_completo(driver, timeout=320, estable_s=10):
     inicio = time.time()
     ultimo, desde_estable, ultimo_log = None, None, 0
     while time.time() - inicio < timeout:
-        try: estado = resumen_estado_carga(driver)
-        except Exception: time.sleep(2); continue
+        try:
+            estado = resumen_estado_carga(driver)
+        except Exception:
+            time.sleep(2)
+            continue
         ahora = time.time()
         if ahora - ultimo_log >= 15:
-            print(f"  • {int(ahora-inicio)}s | tablas={estado['tablas']} | modulos={estado['modulos']} | consultando={estado['consultando']}")
+            print(f"  {int(ahora-inicio)}s | tablas={estado['tablas']} | modulos={estado['modulos']} | consultando={estado['consultando']}")
             ultimo_log = ahora
         if estado['modulos'] >= 4 and estado['texto_len'] > 800 and estado['consultando'] == 0:
             if ultimo == estado:
-                if desde_estable is None: desde_estable = ahora
-                elif ahora - desde_estable >= estable_s: return True
-            else: desde_estable = ahora
-        else: desde_estable = None
+                if desde_estable is None:
+                    desde_estable = ahora
+                elif ahora - desde_estable >= estable_s:
+                    return True
+            else:
+                desde_estable = ahora
+        else:
+            desde_estable = None
         ultimo = estado
         try:
             driver.execute_script('window.scrollBy(0,500);')
             time.sleep(0.6)
             driver.execute_script('window.scrollBy(0,-120);')
-        except Exception: pass
+        except Exception:
+            pass
         time.sleep(2)
     return False
 
@@ -331,14 +331,14 @@ def consultar_placa(driver, placa):
                     (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
                     (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
                 ], timeout=5, visibles=False)
-                if campo: break
-            except Exception: pass
+                if campo:
+                    break
+            except Exception:
+                pass
     if not campo:
-        raise Exception('No se encontró el campo de placa')
-
+        raise Exception('No se encontro el campo de placa')
     escribir_humano(driver, campo, placa)
     time.sleep(0.5)
-
     enviado = False
     for by, sel in [
         (By.XPATH, "//button[contains(translate(.,'CONSULTARBUSCAR','consultarbuscar'),'consultar') or contains(translate(.,'CONSULTARBUSCAR','consultarbuscar'),'buscar')]"),
@@ -351,10 +351,12 @@ def consultar_placa(driver, placa):
                     js_click(driver, btn)
                     enviado = True
                     break
-            if enviado: break
-        except Exception: pass
-
-    if not enviado: campo.send_keys(Keys.ENTER)
+            if enviado:
+                break
+        except Exception:
+            pass
+    if not enviado:
+        campo.send_keys(Keys.ENTER)
     time.sleep(4)
     esperar_documento_listo(driver, 25)
     esperar_reporte_completo(driver, timeout=320, estable_s=10)
@@ -368,8 +370,8 @@ def esperar_descarga_pdf(driver, antes, timeout=150):
     inicio = time.time()
     while time.time() - inicio < timeout:
         actuales = set(glob.glob(os.path.join(carpeta, '*')))
-        nuevos   = [p for p in (actuales - antes) if os.path.isfile(p)]
-        pdfs     = [p for p in nuevos if p.lower().endswith('.pdf')]
+        nuevos = [p for p in (actuales - antes) if os.path.isfile(p)]
+        pdfs = [p for p in nuevos if p.lower().endswith('.pdf')]
         if pdfs and not any(p.endswith('.crdownload') for p in nuevos):
             pdfs.sort(key=os.path.getmtime, reverse=True)
             return pdfs[0]
@@ -394,23 +396,32 @@ def descargar_pdf(driver, placa):
                         if not disabled:
                             btn = el
                             break
-                if btn: break
-            except Exception: pass
-        if btn: break
+                if btn:
+                    break
+            except Exception:
+                pass
+        if btn:
+            break
         time.sleep(0.5)
-    if not btn: return None
+    if not btn:
+        return None
     antes = archivos_en_descargas(driver)
-    try: js_click(driver, btn)
+    try:
+        js_click(driver, btn)
     except Exception:
-        try: btn.send_keys(Keys.ENTER)
-        except Exception: pass
+        try:
+            btn.send_keys(Keys.ENTER)
+        except Exception:
+            pass
     time.sleep(2)
     pdf = esperar_descarga_pdf(driver, antes, timeout=150)
     if pdf:
-        nombre  = f'reporte_{placa}_{timestamp()}.pdf'
+        nombre = f'reporte_{placa}_{timestamp()}.pdf'
         destino = os.path.abspath(nombre)
-        try: shutil.move(pdf, destino)
-        except Exception: shutil.copy2(pdf, destino)
+        try:
+            shutil.move(pdf, destino)
+        except Exception:
+            shutil.copy2(pdf, destino)
         return destino
     return None
 
@@ -419,21 +430,23 @@ def pdf_a_base64(pdf_path):
         return base64.b64encode(f.read()).decode('utf-8')
 
 def ejecutar_consulta_completa(placa, usuario, contrasena):
-    placa  = placa.strip().upper()
+    placa = placa.strip().upper()
     driver = crear_driver()
     try:
-        print(f'🔑 Login para placa {placa}...')
+        print(f'Login para placa {placa}...')
         hacer_login(driver, usuario, contrasena)
-        print(f'🔎 Consultando placa {placa}...')
+        print(f'Consultando placa {placa}...')
         consultar_placa(driver, placa)
-        print(f'📄 Descargando PDF...')
+        print('Descargando PDF...')
         pdf_path = descargar_pdf(driver, placa)
         if pdf_path:
-            print(f'✅ PDF listo: {pdf_path}')
+            print(f'PDF listo: {pdf_path}')
             return pdf_path
         else:
-            print('⚠️ No se pudo descargar el PDF')
+            print('No se pudo descargar el PDF')
             return None
     finally:
-        try: driver.quit()
-        except Exception: pass
+        try:
+            driver.quit()
+        except Exception:
+            pass
