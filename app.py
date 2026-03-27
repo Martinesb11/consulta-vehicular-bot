@@ -18,11 +18,9 @@ ULTRAMSG_TOKEN    = os.environ.get('ULTRAMSG_TOKEN', '')
 GRUPO_AUTORIZADO  = '120363406557895449@g.us'
 LIMITE_DIARIO     = 15
 
-# ⚠️ ACTUALIZA CON TUS NÚMEROS
 MIEMBROS = {
     '51982008561': 'Juan',
     '51935203969': 'Alf',
-    # '51999999999': 'Nombre',
 }
 
 # ── Cola de consultas (1 a la vez) ─────────────────────────
@@ -142,7 +140,6 @@ def enviar_pdf_b64(destino, pdf_b64, placa, autor_numero, desde_cache=False):
 def procesar_consulta(placa, destino, autor):
     inicio = time.time()
 
-    # Verificar caché primero
     cached = obtener_cache(placa)
     if cached:
         print(f'⚡ Placa {placa} encontrada en caché')
@@ -152,7 +149,6 @@ def procesar_consulta(placa, destino, autor):
             enviar_mensaje(destino, f'❌ Error enviando PDF para *{placa}*')
         return
 
-    # Consulta completa (sesión activa)
     try:
         pdf_path = ejecutar_consulta_completa(placa, USUARIO_CV, CONTRASENA_CV)
         segundos = int(time.time() - inicio)
@@ -201,10 +197,10 @@ def webhook():
         autor = (msg_data.get('author') or msg_data.get('from', '')).replace('@c.us', '').replace('+', '').strip()
         print(f'Mensaje de {autor}: {body}')
 
-        if body.startswith('CONSULTA '):
-            placa = body.replace('CONSULTA ', '').strip()
+        # ✅ CORRECCIÓN: replace solo 'CONSULTA' sin espacio fijo
+        if body.startswith('CONSULTA'):
+            placa = body.replace('CONSULTA', '').strip()
             if 6 <= len(placa) <= 8:
-                # Verificar límite diario
                 if not verificar_limite(autor):
                     nombre = MIEMBROS.get(autor, autor)
                     enviar_mensaje(GRUPO_AUTORIZADO,
@@ -213,7 +209,6 @@ def webhook():
                     )
                     return jsonify({'status': 'limite_alcanzado'}), 200
 
-                # Avisar posición en cola
                 posicion = cola.qsize() + 1
                 if posicion > 1:
                     tiempo_est = posicion * 3
@@ -259,5 +254,5 @@ if __name__ == '__main__':
     print(f'🚀 Servidor iniciando en puerto {port}')
     print(f'📍 Grupo autorizado: {GRUPO_AUTORIZADO}')
     print(f'🌐 Iniciando sesión web...')
-    inicializar_driver_global()  # ← Login una sola vez al arrancar
+    inicializar_driver_global()
     app.run(host='0.0.0.0', port=port, debug=False)
