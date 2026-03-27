@@ -14,25 +14,6 @@ URL_BASE     = 'https://www.consultavehicular.services'
 URL_LOGIN    = f'{URL_BASE}/'
 URL_CONSULTA = f'{URL_BASE}/reult2.html'
 
-# ── Driver global ──────────────────────────────────────────
-DRIVER_GLOBAL = None
-LOCK_DRIVER   = None
-
-def inicializar_driver_global():
-    global DRIVER_GLOBAL, LOCK_DRIVER
-    import threading
-    LOCK_DRIVER = threading.Lock()
-    if DRIVER_GLOBAL is None:
-        print('🚀 Creando driver global para sesión persistente...')
-        DRIVER_GLOBAL = crear_driver()
-    return DRIVER_GLOBAL
-
-def obtener_driver():
-    global DRIVER_GLOBAL
-    if DRIVER_GLOBAL is None:
-        return inicializar_driver_global()
-    return DRIVER_GLOBAL
-
 def timestamp():
     return datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -151,9 +132,7 @@ def escribir_humano(driver, el, valor):
     except Exception:
         pass
     driver.execute_script("arguments[0].value = '';", el)
-    driver.execute_script(
-        "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el
-    )
+    driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el)
     time.sleep(0.2)
     for char in valor:
         el.send_keys(char)
@@ -206,121 +185,11 @@ def cerrar_alerta_si_existe(driver):
     except Exception:
         return False
 
-def login_confirmado(driver):
-    try:
-        url_actual = (driver.current_url or '').lower().rstrip('/')
-        url_login  = URL_LOGIN.lower().rstrip('/')
-        if url_actual == url_login:
-            return False
-        if 'reult2' in url_actual or 'result2' in url_actual:
-            return True
-        txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
-        return any(m in txt for m in [
-            'consultar placa', 'reporte vehicular',
-            'impuesto vehicular', 'sat lima', 'sutran'
-        ])
-    except Exception:
-        return False
-
-def llenar_campo_login(driver, campo, valor, nombre):
-    # Estrategia 1: CDP mouse click + insertText
-    try:
-        rect = driver.execute_script("""
-            var r = arguments[0].getBoundingClientRect();
-            return {x: r.left + r.width/2, y: r.top + r.height/2};
-        """, campo)
-        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {
-            'type': 'mousePressed', 'x': rect['x'], 'y': rect['y'],
-            'button': 'left', 'clickCount': 1
-        })
-        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {
-            'type': 'mouseReleased', 'x': rect['x'], 'y': rect['y'],
-            'button': 'left', 'clickCount': 1
-        })
-        time.sleep(0.4)
-        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
-            'type': 'keyDown', 'modifiers': 2, 'key': 'a', 'code': 'KeyA'
-        })
-        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
-            'type': 'keyUp', 'modifiers': 2, 'key': 'a', 'code': 'KeyA'
-        })
-        time.sleep(0.1)
-        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
-            'type': 'keyDown', 'key': 'Backspace', 'code': 'Backspace'
-        })
-        driver.execute_cdp_cmd('Input.dispatchKeyEvent', {
-            'type': 'keyUp', 'key': 'Backspace', 'code': 'Backspace'
-        })
-        time.sleep(0.1)
-        driver.execute_cdp_cmd('Input.insertText', {'text': valor})
-        time.sleep(0.5)
-        val = driver.execute_script("return arguments[0].value;", campo)
-        if val:
-            print(f'{nombre} OK (CDP): {val if nombre == "Usuario" else "*" * len(val)}')
-            return True
-        print(f'{nombre} CDP ejecutado (continuando...)')
-        return True
-    except Exception as e:
-        print(f'CDP falló ({nombre}): {e}')
-
-    # Estrategia 2: JS nativeSetter React/Vue/Angular
-    try:
-        driver.execute_script("""
-            var el = arguments[0];
-            var val = arguments[1];
-            el.focus(); el.click();
-            var setter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            ).set;
-            setter.call(el, val);
-            ['focus','input','change','keyup','blur'].forEach(function(ev) {
-                el.dispatchEvent(new Event(ev, {bubbles: true}));
-            });
-        """, campo, valor)
-        time.sleep(0.5)
-        val = driver.execute_script("return arguments[0].value;", campo)
-        if val:
-            print(f'{nombre} OK (nativeSetter): {val if nombre == "Usuario" else "*" * len(val)}')
-            return True
-    except Exception as e:
-        print(f'nativeSetter falló ({nombre}): {e}')
-
-    # Estrategia 3: ActionChains char por char
-    try:
-        driver.execute_script("arguments[0].focus(); arguments[0].click();", campo)
-        time.sleep(0.4)
-        ActionChains(driver)\
-            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
-            .send_keys(Keys.DELETE).perform()
-        time.sleep(0.2)
-        for char in valor:
-            ActionChains(driver).send_keys_to_element(campo, char).perform()
-            time.sleep(random.uniform(0.05, 0.12))
-        time.sleep(0.4)
-        val = driver.execute_script("return arguments[0].value;", campo)
-        if val:
-            print(f'{nombre} OK (char-por-char): {val if nombre == "Usuario" else "*" * len(val)}')
-            return True
-    except Exception as e:
-        print(f'char-por-char falló ({nombre}): {e}')
-
-    print(f'❌ TODAS las estrategias fallaron para {nombre}')
-    return False
-
 def hacer_login(driver, usuario, contrasena):
-    # ✅ Limpiar estado previo para simular sesión fresca
-    try:
-        driver.delete_all_cookies()
-        driver.execute_script("window.localStorage.clear();")
-        driver.execute_script("window.sessionStorage.clear();")
-        print('🧹 Cookies y storage limpiados')
-    except Exception:
-        pass
-
     print('Cargando pagina de login...')
     driver.get(URL_LOGIN)
     esperar_documento_listo(driver, 30)
-    time.sleep(4)
+    time.sleep(3)
     cerrar_alerta_si_existe(driver)
     cerrar_popups(driver)
 
@@ -337,21 +206,18 @@ def hacer_login(driver, usuario, contrasena):
         raise Exception('No se encontraron los campos de login')
 
     print('Escribiendo credenciales...')
-    llenar_campo_login(driver, campo_user, usuario, 'Usuario')
-    time.sleep(0.8)
+    escribir_humano(driver, campo_user, usuario)
+    print(f'Usuario ingresado')
+    time.sleep(0.5)
 
-    # Re-buscar contraseña por si el DOM se actualizó
+    # Re-buscar por si el DOM se actualizó
     campo_pass = buscar(driver, [
         (By.CSS_SELECTOR, 'input#password'),
         (By.CSS_SELECTOR, 'input[type="password"]'),
     ], timeout=5, visibles=False)
-    llenar_campo_login(driver, campo_pass, contrasena, 'Contrasena')
-    time.sleep(0.8)
-
-    val_u = driver.execute_script("return arguments[0].value;", campo_user)
-    val_p = driver.execute_script("return arguments[0].value;", campo_pass)
-    print(f'✔ Usuario en campo: [{val_u}]')
-    print(f'✔ Contrasena en campo: [{len(val_p) if val_p else 0} chars]')
+    escribir_humano(driver, campo_pass, contrasena)
+    print(f'Contrasena ingresada')
+    time.sleep(0.5)
 
     # Enviar formulario
     enviado = False
@@ -383,7 +249,12 @@ def hacer_login(driver, usuario, contrasena):
     fin = time.time() + 30
     while time.time() < fin:
         cerrar_alerta_si_existe(driver)
-        if login_confirmado(driver):
+        url_actual = (driver.current_url or '').lower()
+        txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
+        if 'reult2' in url_actual or 'result2' in url_actual:
+            print('✅ Login exitoso')
+            return
+        if any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular']):
             print('✅ Login exitoso')
             return
         time.sleep(1.0)
@@ -433,25 +304,19 @@ def esperar_reporte_completo(driver, timeout=320, estable_s=10):
 
 def consultar_placa(driver, placa):
     campo = None
-    if login_confirmado(driver):
-        campo = buscar(driver, [
-            (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
-            (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
-        ], timeout=3, visibles=False)
-    if not campo:
-        for url in [URL_CONSULTA, f'{URL_BASE}/result2.html']:
-            try:
-                driver.get(url)
-                esperar_documento_listo(driver, 20)
-                time.sleep(2)
-                campo = buscar(driver, [
-                    (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
-                    (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
-                ], timeout=5, visibles=False)
-                if campo:
-                    break
-            except Exception:
-                pass
+    for url in [URL_CONSULTA, f'{URL_BASE}/result2.html']:
+        try:
+            driver.get(url)
+            esperar_documento_listo(driver, 20)
+            time.sleep(2)
+            campo = buscar(driver, [
+                (By.CSS_SELECTOR, 'input[placeholder*="placa" i]'),
+                (By.XPATH, "//input[contains(translate(@placeholder,'PLACA','placa'),'placa')]"),
+            ], timeout=5, visibles=False)
+            if campo:
+                break
+        except Exception:
+            pass
     if not campo:
         raise Exception('No se encontro el campo de placa')
     escribir_humano(driver, campo, placa)
@@ -551,23 +416,16 @@ def pdf_a_base64(pdf_path):
     with open(pdf_path, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
 
-# ── Consulta con sesión activa ─────────────────────────────
+# ── Consulta: driver nuevo por cada placa ─────────────────
 def ejecutar_consulta_completa(placa, usuario, contrasena):
-    placa    = placa.strip().upper()
-    usuario  = usuario.strip()
+    placa      = placa.strip().upper()
+    usuario    = usuario.strip()
     contrasena = contrasena.strip()
-    driver   = obtener_driver()
+    driver     = None
     try:
-        try:
-            if not login_confirmado(driver):
-                print('⚠️ Sesión no activa, haciendo login...')
-                hacer_login(driver, usuario, contrasena)
-            else:
-                print('✅ Sesión activa, continuando...')
-        except Exception as e:
-            print(f'❌ Error verificando sesión: {e}. Re-logueando...')
-            hacer_login(driver, usuario, contrasena)
-
+        print(f'🚀 Creando driver para placa {placa}...')
+        driver = crear_driver()
+        hacer_login(driver, usuario, contrasena)
         print(f'Consultando placa {placa}...')
         consultar_placa(driver, placa)
         print('Descargando PDF...')
@@ -583,3 +441,14 @@ def ejecutar_consulta_completa(placa, usuario, contrasena):
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        if driver:
+            try:
+                driver.quit()
+                print(f'🔒 Driver cerrado para {placa}')
+            except Exception:
+                pass
+
+# ── Mantener compatibilidad con app.py ────────────────────
+def inicializar_driver_global():
+    print('ℹ️ Modo driver-por-consulta activo (no se usa driver global)')
