@@ -14,12 +14,11 @@ URL_BASE     = 'https://www.consultavehicular.services'
 URL_LOGIN    = f'{URL_BASE}/'
 URL_CONSULTA = f'{URL_BASE}/reult2.html'
 
-# ── Driver global (sesión activa) ──────────────────────────
+# ── Driver global ──────────────────────────────────────────
 DRIVER_GLOBAL = None
 LOCK_DRIVER   = None
 
 def inicializar_driver_global():
-    """Crear driver una sola vez al arranque del servidor"""
     global DRIVER_GLOBAL, LOCK_DRIVER
     import threading
     LOCK_DRIVER = threading.Lock()
@@ -29,7 +28,6 @@ def inicializar_driver_global():
     return DRIVER_GLOBAL
 
 def obtener_driver():
-    """Obtener el driver global de forma thread-safe"""
     global DRIVER_GLOBAL
     if DRIVER_GLOBAL is None:
         return inicializar_driver_global()
@@ -39,10 +37,10 @@ def timestamp():
     return datetime.now().strftime('%Y%m%d_%H%M%S')
 
 def texto_normalizado(txt):
-    return re.sub(r'\\s+', ' ', (txt or '').strip()).lower()
+    return re.sub(r'\s+', ' ', (txt or '').strip()).lower()
 
 def limpiar_campo(txt):
-    return re.sub(r'\\s+', ' ', (txt or '').strip()).strip(' :')
+    return re.sub(r'\s+', ' ', (txt or '').strip()).strip(' :')
 
 def crear_driver():
     download_dir = os.path.abspath('descargas_cv')
@@ -209,11 +207,20 @@ def cerrar_alerta_si_existe(driver):
         return False
 
 def login_confirmado(driver):
-    txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
-    url = (driver.current_url or '').lower()
-    if 'reult2' in url or 'result2' in url:
-        return True
-    return any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran'])
+    try:
+        txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
+        url = (driver.current_url or '').lower()
+        # Si sigue en la página de login, NO está confirmado
+        if url == URL_LOGIN.lower() or url.endswith('/') and 'reult2' not in url and 'result2' not in url:
+            # Verificar que haya contenido de sesión activa
+            if any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran']):
+                return True
+            return False
+        if 'reult2' in url or 'result2' in url:
+            return True
+        return any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran'])
+    except Exception:
+        return False
 
 def hacer_login(driver, usuario, contrasena):
     print('Cargando pagina de login...')
@@ -249,16 +256,39 @@ def hacer_login(driver, usuario, contrasena):
     time.sleep(0.5)
     escribir_humano(driver, campo_pass, contrasena)
     time.sleep(random.uniform(0.5, 1.2))
+
     val_user = driver.execute_script("return arguments[0].value;", campo_user)
     val_pass = driver.execute_script("return arguments[0].value;", campo_pass)
     print(f'Usuario ingresado: {val_user}')
     print(f'Contrasena ingresada: {"*" * len(val_pass)}')
-    if val_user != usuario:
-        driver.execute_script(f"arguments[0].value = '{usuario}';", campo_user)
-        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo_user)
-    if val_pass != contrasena:
+
+    # ✅ CORRECCIÓN: retry JS si usuario quedó vacío
+    if not val_user:
+        print('⚠️ Usuario vacío, forzando via JS...')
+        driver.execute_script("arguments[0].value = arguments[1];", campo_user, usuario)
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
+            campo_user
+        )
+        time.sleep(0.5)
+        val_user = driver.execute_script("return arguments[0].value;", campo_user)
+        print(f'Usuario (retry JS): {val_user}')
+
+    if not val_pass:
+        print('⚠️ Contraseña vacía, forzando via JS...')
         driver.execute_script("arguments[0].value = arguments[1];", campo_pass, contrasena)
-        driver.execute_script("arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo_pass)
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
+            campo_pass
+        )
+        time.sleep(0.5)
+
+    # Verificar que ambos campos tengan valor antes de enviar
+    if not val_user:
+        raise Exception(f'No se pudo ingresar el usuario. Valor actual: "{val_user}"')
+
     time.sleep(0.5)
     enviado = False
     for by, sel in [
@@ -288,7 +318,7 @@ def hacer_login(driver, usuario, contrasena):
     while time.time() < fin:
         cerrar_alerta_si_existe(driver)
         if login_confirmado(driver):
-            print('Login exitoso')
+            print('✅ Login exitoso')
             return
         time.sleep(1.0)
     raise Exception(f'Login no confirmado. URL: {driver.current_url}')
@@ -455,19 +485,11 @@ def pdf_a_base64(pdf_path):
     with open(pdf_path, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
 
-# ── NUEVA FUNCIÓN: ejecutar con sesión activa ──────────────
+# ── Consulta con sesión activa ─────────────────────────────
 def ejecutar_consulta_completa(placa, usuario, contrasena):
-    """
-    Ejecuta consulta con sesión persistente.
-    - Login UNA sola vez al arrancar el servidor
-    - Todas las consultas reutilizan la misma sesión
-    - Detecta sesión expirada y re-login automático
-    """
-    placa = placa.strip().upper()
+    placa  = placa.strip().upper()
     driver = obtener_driver()
-    
     try:
-        # Verificar si ya está logueado
         try:
             if not login_confirmado(driver):
                 print(f'⚠️ Sesión no activa, haciendo login...')
@@ -480,7 +502,6 @@ def ejecutar_consulta_completa(placa, usuario, contrasena):
 
         print(f'Consultando placa {placa}...')
         consultar_placa(driver, placa)
-        
         print('Descargando PDF...')
         pdf_path = descargar_pdf(driver, placa)
         if pdf_path:
@@ -489,7 +510,6 @@ def ejecutar_consulta_completa(placa, usuario, contrasena):
         else:
             print('No se pudo descargar el PDF')
             return None
-            
     except Exception as e:
         print(f'❌ Error en consulta: {e}')
         import traceback
