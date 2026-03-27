@@ -208,34 +208,90 @@ def cerrar_alerta_si_existe(driver):
 
 def login_confirmado(driver):
     try:
-        txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
-        url = (driver.current_url or '').lower()
-        # Si sigue en la página de login, NO está confirmado
-        if url == URL_LOGIN.lower() or url.endswith('/') and 'reult2' not in url and 'result2' not in url:
-            # Verificar que haya contenido de sesión activa
-            if any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran']):
-                return True
+        url_actual = (driver.current_url or '').lower().rstrip('/')
+        url_login  = URL_LOGIN.lower().rstrip('/')
+        if url_actual == url_login:
             return False
-        if 'reult2' in url or 'result2' in url:
+        if 'reult2' in url_actual or 'result2' in url_actual:
             return True
-        return any(m in txt for m in ['consultar placa', 'reporte vehicular', 'impuesto vehicular', 'sat lima', 'sutran'])
+        txt = texto_normalizado(driver.find_element(By.TAG_NAME, 'body').text)
+        return any(m in txt for m in [
+            'consultar placa', 'reporte vehicular',
+            'impuesto vehicular', 'sat lima', 'sutran'
+        ])
     except Exception:
         return False
+
+def llenar_campo_login(driver, campo, valor, nombre):
+    # Estrategia 1: ActionChains completo
+    try:
+        ActionChains(driver)\
+            .move_to_element(campo)\
+            .click(campo)\
+            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
+            .send_keys(Keys.DELETE)\
+            .send_keys(valor)\
+            .perform()
+        time.sleep(0.5)
+        val = driver.execute_script("return arguments[0].value;", campo)
+        if val:
+            print(f'{nombre} OK (ActionChains): {val if nombre == "Usuario" else "*" * len(val)}')
+            return True
+    except Exception as e:
+        print(f'ActionChains falló ({nombre}): {e}')
+
+    # Estrategia 2: send_keys carácter por carácter
+    try:
+        driver.execute_script("arguments[0].focus();", campo)
+        time.sleep(0.3)
+        campo.click()
+        time.sleep(0.3)
+        campo.send_keys(Keys.CONTROL + 'a')
+        time.sleep(0.1)
+        campo.send_keys(Keys.DELETE)
+        time.sleep(0.1)
+        for char in valor:
+            campo.send_keys(char)
+            time.sleep(random.uniform(0.04, 0.12))
+        time.sleep(0.4)
+        val = driver.execute_script("return arguments[0].value;", campo)
+        if val:
+            print(f'{nombre} OK (send_keys): {val if nombre == "Usuario" else "*" * len(val)}')
+            return True
+    except Exception as e:
+        print(f'send_keys falló ({nombre}): {e}')
+
+    # Estrategia 3: JS nativeSetter (React/Vue/Angular)
+    try:
+        driver.execute_script("""
+            var el = arguments[0];
+            var val = arguments[1];
+            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            nativeInputValueSetter.call(el, val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        """, campo, valor)
+        time.sleep(0.5)
+        val = driver.execute_script("return arguments[0].value;", campo)
+        if val:
+            print(f'{nombre} OK (nativeSetter): {val if nombre == "Usuario" else "*" * len(val)}')
+            return True
+    except Exception as e:
+        print(f'nativeSetter falló ({nombre}): {e}')
+
+    print(f'❌ TODAS las estrategias fallaron para {nombre}')
+    return False
 
 def hacer_login(driver, usuario, contrasena):
     print('Cargando pagina de login...')
     driver.get(URL_LOGIN)
     esperar_documento_listo(driver, 30)
-    time.sleep(3)
+    time.sleep(4)
     cerrar_alerta_si_existe(driver)
     cerrar_popups(driver)
-    try:
-        ActionChains(driver).move_by_offset(
-            random.randint(100, 400), random.randint(100, 300)
-        ).perform()
-    except Exception:
-        pass
-    time.sleep(0.5)
+
     campo_user = buscar(driver, [
         (By.CSS_SELECTOR, 'input#email'),
         (By.CSS_SELECTOR, 'input[type="email"]'),
@@ -247,49 +303,23 @@ def hacer_login(driver, usuario, contrasena):
     ], timeout=10, visibles=False)
     if not campo_user or not campo_pass:
         raise Exception('No se encontraron los campos de login')
+
     print('Escribiendo credenciales...')
-    driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", campo_user)
-    time.sleep(1.0)
-    escribir_humano(driver, campo_user, usuario)
-    time.sleep(random.uniform(0.5, 1.0))
-    ActionChains(driver).move_to_element(campo_pass).perform()
+    ok_user = llenar_campo_login(driver, campo_user, usuario, 'Usuario')
     time.sleep(0.5)
-    escribir_humano(driver, campo_pass, contrasena)
-    time.sleep(random.uniform(0.5, 1.2))
 
-    val_user = driver.execute_script("return arguments[0].value;", campo_user)
-    val_pass = driver.execute_script("return arguments[0].value;", campo_pass)
-    print(f'Usuario ingresado: {val_user}')
-    print(f'Contrasena ingresada: {"*" * len(val_pass)}')
-
-    # ✅ CORRECCIÓN: retry JS si usuario quedó vacío
-    if not val_user:
-        print('⚠️ Usuario vacío, forzando via JS...')
-        driver.execute_script("arguments[0].value = arguments[1];", campo_user, usuario)
-        driver.execute_script(
-            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
-            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
-            campo_user
-        )
-        time.sleep(0.5)
-        val_user = driver.execute_script("return arguments[0].value;", campo_user)
-        print(f'Usuario (retry JS): {val_user}')
-
-    if not val_pass:
-        print('⚠️ Contraseña vacía, forzando via JS...')
-        driver.execute_script("arguments[0].value = arguments[1];", campo_pass, contrasena)
-        driver.execute_script(
-            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
-            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
-            campo_pass
-        )
-        time.sleep(0.5)
-
-    # Verificar que ambos campos tengan valor antes de enviar
-    if not val_user:
-        raise Exception(f'No se pudo ingresar el usuario. Valor actual: "{val_user}"')
-
+    # Re-buscar contraseña por si el DOM se actualizó
+    campo_pass = buscar(driver, [
+        (By.CSS_SELECTOR, 'input#password'),
+        (By.CSS_SELECTOR, 'input[type="password"]'),
+    ], timeout=5, visibles=False)
+    ok_pass = llenar_campo_login(driver, campo_pass, contrasena, 'Contrasena')
     time.sleep(0.5)
+
+    if not ok_user:
+        raise Exception('No se pudo escribir el usuario con ninguna estrategia')
+
+    # Enviar formulario
     enviado = False
     for by, sel in [
         (By.XPATH, "//button[contains(translate(.,'INGRESAR','ingresar'),'ingresar')]"),
@@ -311,9 +341,11 @@ def hacer_login(driver, usuario, contrasena):
             pass
     if not enviado:
         campo_pass.send_keys(Keys.ENTER)
-    time.sleep(2)
+
+    time.sleep(3)
     cerrar_alerta_si_existe(driver)
     esperar_documento_listo(driver, 25)
+
     fin = time.time() + 30
     while time.time() < fin:
         cerrar_alerta_si_existe(driver)
@@ -492,10 +524,10 @@ def ejecutar_consulta_completa(placa, usuario, contrasena):
     try:
         try:
             if not login_confirmado(driver):
-                print(f'⚠️ Sesión no activa, haciendo login...')
+                print('⚠️ Sesión no activa, haciendo login...')
                 hacer_login(driver, usuario, contrasena)
             else:
-                print(f'✅ Sesión activa, continuando...')
+                print('✅ Sesión activa, continuando...')
         except Exception as e:
             print(f'❌ Error verificando sesión: {e}. Re-logueando...')
             hacer_login(driver, usuario, contrasena)
