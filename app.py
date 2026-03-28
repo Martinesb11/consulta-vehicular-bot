@@ -119,17 +119,23 @@ def procesar_cola():
 # ── Webhook ────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data      = request.json or {}
-    grupo_id  = data.get('from', '')
-    numero    = data.get('author', '').replace('@c.us', '').replace('+', '')
-    body      = (data.get('body') or '').strip().upper()
-    tipo      = data.get('type', '')
+    data     = request.json or {}
+    grupo_id = data.get('from', '')
+    numero   = data.get('author', '').replace('@c.us', '').replace('+', '')
+    body     = (data.get('body') or '').strip().upper()
+    tipo     = data.get('type', '')
+
+    # DEBUG TEMPORAL
+    print(f'📨 from=[{grupo_id}] author=[{numero}] type=[{tipo}] body=[{body}]')
 
     if grupo_id != GRUPO_AUTORIZADO:
+        print(f'❌ Grupo no autorizado: [{grupo_id}] esperado: [{GRUPO_AUTORIZADO}]')
         return jsonify({'status': 'ignored'}), 200
     if tipo != 'chat':
+        print(f'❌ Tipo ignorado: [{tipo}]')
         return jsonify({'status': 'ignored'}), 200
     if not body.startswith('CONSULTA'):
+        print(f'❌ Body ignorado: [{body}]')
         return jsonify({'status': 'ignored'}), 200
 
     nombre = MIEMBROS.get(numero, numero)
@@ -176,7 +182,7 @@ if __name__ == '__main__':
     print(f'📍 Grupo autorizado: {GRUPO_AUTORIZADO}')
     print(f'🌐 Iniciando en modo driver-por-consulta...')
 
-    inicializar_driver_global()  # solo imprime el aviso
+    inicializar_driver_global()
 
     hilo = threading.Thread(target=procesar_cola, daemon=True)
     hilo.start()
